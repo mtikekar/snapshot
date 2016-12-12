@@ -1,0 +1,70 @@
+#!/bin/bash
+# btrfs filesystem with options in fstab:
+#  nofail,user,user_subvol_rm_allowed,compress=lzo
+# mount cmd: mount /dev/...
+# unmount  : umount /dev/...
+set -o errexit
+set -o nounset
+cmd=$(basename $0)
+
+do_help() {
+    cat <<EOF
+usage:
+  $cmd help: print this message
+  $cmd init <src>: initialize current dir to store backups of <src>
+  $cmd run: create new snapshot
+  $cmd delete <dir>: delete a snapshot
+  $cmd keep [<n>]: keep latest <n> snapshots. default <n> is 10.
+EOF
+}
+
+do_init() {
+    [ -z "${1:-}" ] && { echo "usage: $cmd init <src>"; exit 2; }
+    ln -s "$1" .src
+    btrfs subvolume create .latest
+}
+
+do_run() {
+    [ -d .src ] || { echo ".src not found. run init first."; exit 1; }
+    [ -d .latest ] || { echo ".latest not found. run init first."; exit 1; }
+
+    log=.latest.log
+    [ -f $log ] && { echo "$log found. previous run didn't finish."; exit 1; }
+
+    echo "Started rsync at $(date)"
+    rsync --del --inplace --no-whole-file -a --info=progress2 --log-file=$log \
+        .src/ .latest
+    echo "Rsync finished at $(date)"
+    touch .latest
+
+    prev="$(ls -rv | head -n 1)"
+    prev=${prev:-0}
+
+    # see if more than 3 lines in log
+    nc=$(head -n 4 $log | wc -l)
+    if [ $nc -le 3 ]; then
+        echo "Nothing new in backup."
+        cat $log >> .$prev.log
+        rm $log
+    else
+        let ++prev # prev++ doesnt work with set -e for prev=0
+        btrfs subvolume snapshot -r .latest $prev
+        mv $log .$prev.log
+    fi
+}
+
+do_delete() {
+    [ -z "${1:-}" ] && { echo "missing snapshot name to delete"; exit 2; }
+    btrfs property set -ts "$1" ro false
+    btrfs subvolume delete "$1"
+}
+
+do_keep() {
+    n=${1:-10}
+    for snap in $(ls -v | head -n -"$n"); do
+        do_delete "$snap"
+    done
+}
+
+[ "$(type -t do_${1:-})" = function ] || { do_help; exit 2; }
+do_$1 "${@:2}"
