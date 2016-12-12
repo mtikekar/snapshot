@@ -55,8 +55,11 @@ do_run() {
 
 do_delete() {
     [ -z "${1:-}" ] && { echo "missing snapshot name to delete"; exit 2; }
-    btrfs property set -ts "$1" ro false
-    btrfs subvolume delete "$1"
+    read -p "Delete snapshot $1? [y/n] " yn
+    if [ $yn = y ]; then
+        btrfs property set -ts "$1" ro false
+        btrfs subvolume delete "$1"
+    fi
 }
 
 do_keep() {
