@@ -12,7 +12,9 @@ do_help() {
 usage:
   $cmd help: print this message
   $cmd init <src>: initialize current dir to store backups of <src>
-  $cmd run: create new snapshot
+  $cmd add: copy files from <src> to backup
+  $cmd commit [<tag>]: create new snapshot of backup
+  $cmd status: show changes between backup and last snapshot
   $cmd delete <dir>: delete a snapshot
   $cmd keep [<n>]: keep latest <n> snapshots. default <n> is 10.
 EOF
@@ -24,32 +26,39 @@ do_init() {
     btrfs subvolume create .latest
 }
 
-do_run() {
+check_inited() {
     [ -d .src ] || { echo ".src not found. run init first."; exit 1; }
     [ -d .latest ] || { echo ".latest not found. run init first."; exit 1; }
+}
 
-    log=.latest.log
-    [ -f $log ] && { echo "$log found. previous run didn't finish."; exit 1; }
+rmexp='(building file list|sent \d+ bytes  received \d+ bytes  total size \d+)$'
+log=.latest.log
 
-    echo "Started rsync at $(date)"
+do_status() {
+    check_inited
+    [ -f $log ] && exec grep -Pv "$rmexp" $log
+    echo "No changes to backup since last snapshot"
+}
+
+do_add() {
+    check_inited
     rsync --del --inplace --no-whole-file -a --info=progress2 --log-file=$log \
         .src/ .latest
-    echo "Rsync finished at $(date)"
-    touch .latest
+}
 
-    prev="$(ls -rv | head -n 1)"
-    prev=${prev:-0}
+do_commit() {
+    check_inited
+    cid="${1:-$(date +%F-%T)}"
+    [ -e "$cid" ] && { echo "$cid exists. Choose another name."; exit 1; }
 
-    # see if more than 3 lines in log
-    nc=$(head -n 4 $log | wc -l)
-    if [ $nc -le 3 ]; then
-        echo "Nothing new in backup."
-        cat $log >> .$prev.log
-        rm $log
+    # see if any changes
+    if grep -Pqsv "$rmexp" $log; then
+        btrfs subvolume snapshot .latest "$cid"
+        touch "$cid" # change timestamp of snapshot for sorting
+        btrfs property set -ts "$cid" ro true
+        mv $log ".$cid.log"
     else
-        let ++prev # prev++ doesnt work with set -e for prev=0
-        btrfs subvolume snapshot -r .latest $prev
-        mv $log .$prev.log
+        echo "No changes to backup since last snapshot"
     fi
 }
 
@@ -63,8 +72,9 @@ do_delete() {
 }
 
 do_keep() {
+    check_inited
     n=${1:-10}
-    for snap in $(ls -v | head -n -"$n"); do
+    for snap in $(ls -rc | head -n -"$n"); do
         do_delete "$snap"
     done
 }
