@@ -13,8 +13,9 @@ usage:
   $cmd help: print this message
   $cmd init <src>: initialize current dir to store backups of <src>
   $cmd add: copy files from <src> to backup
-  $cmd commit [<tag>]: create new snapshot of backup
-  $cmd status: show changes between backup and last snapshot
+  $cmd status: show changes between <src> and backup
+  $cmd commit [<tag>]: create new snapshot of backup. default <tag> is present timestamp.
+  $cmd status --cached: show changes between backup and last snapshot
   $cmd delete <dir>: delete a snapshot
   $cmd keep [<n>]: keep latest <n> snapshots. default <n> is 10.
 EOF
@@ -36,13 +37,17 @@ log=.latest.log
 
 do_status() {
     check_inited
-    [ -f $log ] && exec grep -Pv "$rmexp" $log
-    echo "No changes to backup since last snapshot"
+    if [ "${1:-}" = --cached ]; then
+        [ -f $log ] && exec grep -Pv "$rmexp" $log
+        echo "No changes to backup since last snapshot"
+    else
+        rsync --del -a --dry-run --itemize-changes .src/ .latest
+    fi
 }
 
 do_add() {
     check_inited
-    rsync --del --inplace --no-whole-file -a --info=progress2 --log-file=$log \
+    rsync --del -a --inplace --no-whole-file --info=progress2 --log-file=$log \
         .src/ .latest
 }
 
